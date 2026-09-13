@@ -96,7 +96,6 @@ def main():
             "test_loss": round(test_loss, 5),
             "test_acc": round(test_acc, 3),
         })
-        # written every epoch, so an interrupted run still leaves usable curves
         HISTORY_PATH.write_text(json.dumps(history, indent=2))
 
         if test_acc > best_acc:

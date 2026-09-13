@@ -8,14 +8,12 @@ class SimpleCNN(nn.Module):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        # no learnable weights in a pool, so one object is reused twice
         self.pool = nn.MaxPool2d(kernel_size=2)
         self.fc1 = nn.Linear(64 * 7 * 7, 128)
         self.dropout = nn.Dropout(p=0.25)
         self.fc2 = nn.Linear(128, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """(N, 1, 28, 28) -> logits (N, 10)."""
         x = self.pool(F.relu(self.conv1(x)))    # (N, 32, 14, 14)
         x = self.pool(F.relu(self.conv2(x)))    # (N, 64,  7,  7)
         x = torch.flatten(x, 1)                 # (N, 3136)
