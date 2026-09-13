@@ -1,10 +1,12 @@
-# Digit Pad
+# Digit Guesser
 
 A convolutional network that reads handwritten digits, plus a drawing pad to test it
 with your own handwriting.
 
 Train it in under a minute, then draw a digit with your mouse and watch the model
 guess — with a live view of the 28×28 image it actually receives.
+
+![Test-set predictions with confidence, errors in red](predictions.png)
 
 ```
 epoch 3: train loss 0.0405 | test loss 0.0287 | test acc 99.11%
@@ -84,6 +86,10 @@ The lesson generalises well past MNIST: **when a model works on the benchmark an
 fails on your data, suspect preprocessing before architecture.**
 
 ## How the network works
+
+New to convolutional networks? I kept notes while building this —
+[Notes_CNN.pdf](Notes_CNN.pdf) covers kernels, padding, pooling and how the shapes
+fall out, starting from nothing.
 
 ```
 input                    1 × 28 × 28

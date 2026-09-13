@@ -96,7 +96,7 @@ class FlatButton(tk.Frame):
 class DigitPad:
     def __init__(self, root):
         self.root = root
-        root.title("Digit Pad")
+        root.title("Digit Guesser")
         root.configure(bg=BG)
         root.resizable(False, False)
 
@@ -131,7 +131,7 @@ class DigitPad:
         left.grid(row=0, column=0, sticky="n")
 
         self._eyebrow(left, "DRAW").pack(anchor="w")
-        tk.Label(left, text="Digit Pad", bg=BG, fg=TEXT,
+        tk.Label(left, text="Digit Guesser", bg=BG, fg=TEXT,
                  font=tkfont.Font(family=ui, size=17)).pack(anchor="w", pady=(2, 14))
 
         field = tk.Frame(left, bg=BG, highlightthickness=1, highlightbackground=LINE)

@@ -4,4 +4,5 @@ __pycache__/
 data/
 *.pt
 *.png
+!predictions.png
 .pytest_cache/
