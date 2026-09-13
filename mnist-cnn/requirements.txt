@@ -1,0 +1,6 @@
+# Install torch and torchvision FIRST, from the PyTorch index (see README),
+# so you get the CUDA build. Then: pip install -r requirements.txt
+torch
+torchvision
+matplotlib
+pytest
