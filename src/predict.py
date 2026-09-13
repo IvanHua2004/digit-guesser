@@ -1,15 +1,3 @@
-"""Review the trained model against the real test set.
-
-Run after training:
-
-    python src/predict.py              # 16 random test digits with predictions
-    python src/predict.py --mistakes   # only the ones it got WRONG
-
-The --mistakes view is the interesting one. Nearly every model that hits
-99% is wrong on the same handful of genuinely ambiguous 4/9s and 3/5s.
-Looking at them tells you more than the accuracy number does.
-"""
-
 import argparse
 
 import matplotlib

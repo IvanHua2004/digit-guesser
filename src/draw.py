@@ -14,6 +14,7 @@ The panel on the right shows the 28x28 the model actually receives. Watch it
 while you draw - most surprising predictions make sense once you see it.
 """
 
+import json
 import tkinter as tk
 from tkinter import font as tkfont
 
@@ -22,7 +23,7 @@ from PIL import Image, ImageDraw, ImageTk
 
 from digit_prep import to_mnist_frame, to_tensor
 from model import SimpleCNN
-from train import CHECKPOINT_PATH
+from train import CHECKPOINT_PATH, HISTORY_PATH
 
 # ---------------------------------------------------------------- palette --
 BG        = "#0e1116"   # window
@@ -35,10 +36,14 @@ MUTED     = "#8a93a3"
 FAINT     = "#5b6472"
 ACCENT    = "#e0a33e"
 ACCENT_DIM= "#6b5223"
+SERIES_A  = "#c28527"   # train
+SERIES_B  = "#4491cc"   # test
 
 CANVAS   = 336          # drawing field, 12x the model's 28
 PEN      = 20
 PREVIEW  = 168
+CHART_W  = 258
+CHART_H  = 128
 
 
 def pick_font(root, candidates):
@@ -50,8 +55,6 @@ def pick_font(root, candidates):
 
 
 class FlatButton(tk.Frame):
-    """A borderless button that doesn't look like 1998."""
-
     def __init__(self, parent, text, command, font, toggle=False, on=False):
         super().__init__(parent, bg=PANEL, highlightthickness=1,
                          highlightbackground=LINE, highlightcolor=LINE)
@@ -126,7 +129,7 @@ class DigitPad:
         outer = tk.Frame(root, bg=BG, padx=28, pady=26)
         outer.pack()
 
-        # ================================================= left: the canvas
+        # left: the canvas
         left = tk.Frame(outer, bg=BG)
         left.grid(row=0, column=0, sticky="n")
 
@@ -157,7 +160,7 @@ class DigitPad:
                              anchor="w", justify="left")
         self.hint.pack(fill="x", pady=(12, 0))
 
-        # ================================================ right: the readout
+        # right: the readout
         right = tk.Frame(outer, bg=BG, padx=30)
         right.grid(row=0, column=1, sticky="n")
 
@@ -205,7 +208,12 @@ class DigitPad:
         self.status = tk.Label(right, text="", bg=BG, fg=FAINT, font=self.f_label)
         self.status.pack(anchor="w", pady=(12, 0))
 
-        # ---- keys
+        # far right: curves
+        far = tk.Frame(outer, bg=BG)
+        far.grid(row=0, column=2, sticky="n")
+        self.build_charts(far)
+
+        # keys
         for k in ("c", "C", "<BackSpace>"):
             root.bind(k if k.startswith("<") else f"<Key-{k}>", lambda e: self.clear())
         for k in ("m", "M"):
@@ -219,7 +227,124 @@ class DigitPad:
         )
         self.center(root)
 
-    # ---------------------------------------------------------- helpers --
+    # charts 
+    def build_charts(self, parent):
+        """Per-epoch curves from the last training run, if there was one."""
+        self._eyebrow(parent, "TRAINING").pack(anchor="w")
+        tk.Label(parent, text="Last run", bg=BG, fg=TEXT,
+                 font=tkfont.Font(family=self.f_body.cget("family"), size=17)
+                 ).pack(anchor="w", pady=(2, 14))
+
+        history = []
+        if HISTORY_PATH.exists():
+            try:
+                history = json.loads(HISTORY_PATH.read_text())
+            except (ValueError, OSError):
+                history = []
+
+        if not history:
+            box = tk.Frame(parent, bg=BG, highlightthickness=1,
+                           highlightbackground=LINE, width=CHART_W, height=200)
+            box.pack_propagate(False)
+            box.pack()
+            tk.Label(box, text="No training history yet.\n\nRun train.py and the\n"
+                              "loss and accuracy curves\nappear here.",
+                     bg=BG, fg=FAINT, font=self.f_label, justify="left").pack(
+                         expand=True, padx=16)
+            return
+
+        epochs = [h["epoch"] for h in history]
+
+        # cross-entropy loss: two series, so it carries a legend
+        self._eyebrow(parent, "CROSS-ENTROPY LOSS  ·  PER EPOCH").pack(anchor="w", pady=(0, 4))
+        # final values live in the legend, not on the curve: train and test
+        # converge, so endpoint labels would sit on top of each other
+        legend = tk.Frame(parent, bg=BG)
+        legend.pack(anchor="w", pady=(0, 6))
+        finals = (("train", SERIES_A, history[-1]["train_loss"]),
+                  ("test", SERIES_B, history[-1]["test_loss"]))
+        for name, colour, value in finals:
+            swatch = tk.Canvas(legend, width=14, height=10, bg=BG, highlightthickness=0)
+            swatch.create_line(0, 5, 14, 5, fill=colour, width=2)
+            swatch.pack(side="left")
+            tk.Label(legend, text=name, bg=BG, fg=MUTED, font=self.f_label).pack(
+                side="left", padx=(5, 3))
+            tk.Label(legend, text=f"{value:.3f}", bg=BG, fg=TEXT,
+                     font=self.f_pct).pack(side="left", padx=(0, 14))
+
+        loss_cv = tk.Canvas(parent, width=CHART_W, height=CHART_H, bg=BG,
+                            highlightthickness=0)
+        loss_cv.pack(anchor="w")
+        self.plot(loss_cv, epochs, [
+            {"colour": SERIES_A, "values": [h["train_loss"] for h in history]},
+            {"colour": SERIES_B, "values": [h["test_loss"] for h in history]},
+        ], lambda v: f"{v:.3f}", label_endpoint=False)
+
+        # accuracy: one series, so the heading names it and no legend is needed
+        self._eyebrow(parent, "TEST ACCURACY %  ·  PER EPOCH").pack(anchor="w", pady=(18, 4))
+        acc_cv = tk.Canvas(parent, width=CHART_W, height=CHART_H, bg=BG,
+                           highlightthickness=0)
+        acc_cv.pack(anchor="w")
+        self.plot(acc_cv, epochs, [
+            {"colour": SERIES_B, "values": [h["test_acc"] for h in history]},
+        ], lambda v: f"{v:.2f}")
+
+        best = max(h["test_acc"] for h in history)
+        tk.Label(parent, text=f"best {best:.2f}%  ·  {len(epochs)} epochs",
+                 bg=BG, fg=FAINT, font=self.f_label).pack(anchor="w", pady=(10, 0))
+
+    def plot(self, cv, epochs, series, fmt, label_endpoint=True):
+        """A small line chart: one y-scale, recessive grid, nothing clipped.
+
+        Insets are measured from the rendered text rather than guessed, which
+        is what stops the y-axis labels running off the left edge.
+        """
+        values = [v for s in series for v in s["values"]]
+        lo, hi = min(values), max(values)
+        if hi - lo < 1e-9:
+            lo, hi = lo - 0.5, hi + 0.5
+        margin = (hi - lo) * 0.2
+        lo, hi = lo - margin, hi + margin
+
+        ticks = [lo, (lo + hi) / 2, hi]
+        left = max(self.f_pct.measure(fmt(t)) for t in ticks) + 12
+        right = (self.f_pct.measure(fmt(values[-1])) + 16) if label_endpoint else 14
+        top, bottom = 14, 24
+        pw = CHART_W - left - right
+        ph = CHART_H - top - bottom
+
+        def X(i):
+            return left + (pw * i / max(1, len(epochs) - 1))
+
+        def Y(v):
+            return top + ph * (1 - (v - lo) / (hi - lo))
+
+        for frac, tick in zip((1.0, 0.5, 0.0), ticks[::-1]):   # recessive grid
+            y = top + ph * (1 - frac)
+            cv.create_line(left, y, left + pw, y, fill=LINE)
+            cv.create_text(left - 8, y, text=fmt(tick), anchor="e",
+                           fill=FAINT, font=self.f_pct)
+
+        step = max(1, (len(epochs) + 5) // 6)
+        for i, e in enumerate(epochs):
+            if i % step == 0 or i == len(epochs) - 1:
+                cv.create_text(X(i), top + ph + 12, text=str(e),
+                               fill=FAINT, font=self.f_pct)
+
+        for s in series:
+            pts = [(X(i), Y(v)) for i, v in enumerate(s["values"])]
+            if len(pts) > 1:
+                cv.create_line([c for p in pts for c in p],
+                               fill=s["colour"], width=2)
+            for x, y in pts:
+                cv.create_oval(x - 4, y - 4, x + 4, y + 4,
+                               fill=s["colour"], outline=BG, width=2)
+            if label_endpoint:
+                x, y = pts[-1]
+                cv.create_text(x + 10, y, text=fmt(s["values"][-1]), anchor="w",
+                               fill=TEXT, font=self.f_pct)
+
+    # helpers 
     def _eyebrow(self, parent, text):
         return tk.Label(parent, text=text, bg=BG, fg=FAINT, font=self.f_label)
 
@@ -231,7 +356,7 @@ class DigitPad:
         y = max(0, (root.winfo_screenheight() - h) // 2 - 30)
         root.geometry(f"+{x}+{y}")
 
-    # ------------------------------------------------------------ input --
+    # input 
     def stroke(self, event, ink):
         x, y = event.x, event.y
         color = "#ffffff" if ink else INK_FIELD
@@ -278,7 +403,7 @@ class DigitPad:
         self.mode_btn.set_text("Centre of mass" if on else "Bounding box")
         self.hint.configure(text="Right click to erase  ·  C clear  ·  M align  ·  Esc quit")
 
-    # -------------------------------------------------------- inference --
+    # inference 
     @torch.no_grad()
     def predict(self):
         frame = to_mnist_frame(self.image, center_by_mass=self.center_by_mass)

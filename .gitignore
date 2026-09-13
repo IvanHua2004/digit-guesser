@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 data/
 *.pt
+history.json
 *.png
 !predictions.png
 .pytest_cache/

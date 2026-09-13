@@ -9,9 +9,6 @@ from torchvision import datasets, transforms
 # Where the raw MNIST files get downloaded (first run only, ~11 MB).
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-# MNIST images are 28x28 grayscale. These two numbers are the mean and
-# std of the whole training set - normalizing with them centers the data
-# around 0, which makes training more stable.
 MNIST_MEAN = 0.1307
 MNIST_STD = 0.3081
 
@@ -24,12 +21,6 @@ TRANSFORM = transforms.Compose(
 
 
 def get_dataloaders(batch_size: int = 64, num_workers: int = 0):
-    """Return (train_loader, test_loader).
-
-    num_workers=0 on purpose: on Windows, worker processes need the
-    `if __name__ == "__main__":` guard and are slower to spin up. 0 is
-    fine for MNIST.
-    """
     train_set = datasets.MNIST(
         root=DATA_DIR, train=True, download=True, transform=TRANSFORM
     )
@@ -47,7 +38,6 @@ def get_dataloaders(batch_size: int = 64, num_workers: int = 0):
 
 
 def get_device() -> torch.device:
-    """Use the GPU if PyTorch can see one, otherwise fall back to CPU."""
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

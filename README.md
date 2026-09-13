@@ -54,9 +54,10 @@ python src/draw.py                  # the drawing pad
 | `M` | switch how your drawing gets centred |
 | `Esc` | quit |
 
-The panel on the right shows the **28×28 the model actually sees**. It is worth
-watching — nearly every prediction that looks wrong makes sense the moment you look
-at what got fed in.
+The middle panel shows the **28×28 the model actually sees**. It is worth watching
+— nearly every prediction that looks wrong makes sense the moment you look at what
+got fed in. On the right are the curves from your last training run: cross-entropy
+loss for train and test, and test accuracy per epoch.
 
 You can also review the model against the real test set:
 
@@ -145,6 +146,7 @@ tell a broken model from a badly tuned one.
 
 ## Notes
 
-Trained weights are saved to `mnist_cnn.pt`, best test accuracy only. The `data/`
-folder and the checkpoint are gitignored — clone the repo and `data.py` re-downloads
-in a few seconds.
+Trained weights are saved to `mnist_cnn.pt`, best test accuracy only, and per-epoch
+metrics to `history.json`, which is what the drawing pad plots. Both, along with
+`data/`, are gitignored — clone the repo and `data.py` re-downloads in a few
+seconds.

@@ -1,4 +1,5 @@
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -8,7 +9,9 @@ import torch.nn as nn
 from data import get_dataloaders, get_device
 from model import SimpleCNN, count_parameters
 
-CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "mnist_cnn.pt"
+ROOT = Path(__file__).resolve().parent.parent
+CHECKPOINT_PATH = ROOT / "mnist_cnn.pt"
+HISTORY_PATH = ROOT / "history.json"      # per-epoch metrics, plotted by draw.py
 
 
 def train_one_epoch(model, loader, criterion, optimizer, device, epoch, log_every=100):
@@ -73,6 +76,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     best_acc = 0.0
+    history = []
     for epoch in range(1, args.epochs + 1):
         start = time.time()
         train_loss = train_one_epoch(
@@ -86,12 +90,22 @@ def main():
             f"test loss {test_loss:.4f} | test acc {test_acc:.2f}% | {elapsed:.1f}s\n"
         )
 
+        history.append({
+            "epoch": epoch,
+            "train_loss": round(train_loss, 5),
+            "test_loss": round(test_loss, 5),
+            "test_acc": round(test_acc, 3),
+        })
+        # written every epoch, so an interrupted run still leaves usable curves
+        HISTORY_PATH.write_text(json.dumps(history, indent=2))
+
         if test_acc > best_acc:
             best_acc = test_acc
             torch.save(model.state_dict(), CHECKPOINT_PATH)
 
     print(f"best test accuracy: {best_acc:.2f}%")
     print(f"saved weights to {CHECKPOINT_PATH}")
+    print(f"saved history to {HISTORY_PATH}")
 
 
 if __name__ == "__main__":
