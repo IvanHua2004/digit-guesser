@@ -7,11 +7,13 @@ Needs a trained checkpoint, so run train.py first.
     left mouse   draw
     right mouse  erase
     C / Backspace  clear
-    M              toggle centre-of-mass alignment
+    M              toggle centre of mass alignment
+    Tab            switch between Prediction and Training
     Esc            quit
 
-The panel on the right shows the 28x28 the model actually receives. Watch it
-while you draw - most surprising predictions make sense once you see it.
+Layout is two columns. The drawing field is on the left and a tabbed panel on
+the right. Prediction is the default tab because that is what you use while
+drawing. The training curves are something you read once after a run.
 """
 
 import json
@@ -25,7 +27,7 @@ from digit_prep import to_mnist_frame, to_tensor
 from model import SimpleCNN
 from train import CHECKPOINT_PATH, HISTORY_PATH
 
-# ---------------------------------------------------------------- palette --
+# palette
 BG        = "#0e1116"   # window
 PANEL     = "#161a21"   # raised surfaces
 INK_FIELD = "#080a0d"   # the drawing field itself
@@ -36,14 +38,19 @@ MUTED     = "#8a93a3"
 FAINT     = "#5b6472"
 ACCENT    = "#e0a33e"
 ACCENT_DIM= "#6b5223"
+TAB_ON_BG = "#1b1a14"
+# two series chart palette, checked for colour blind separation on this surface
 SERIES_A  = "#c28527"   # train
 SERIES_B  = "#4491cc"   # test
 
 CANVAS   = 336          # drawing field, 12x the model's 28
 PEN      = 20
-PREVIEW  = 168
+PREVIEW  = 120
+PANEL_W  = 272          # right column
+PANEL_H  = 470          # fallback only, the real height gets measured at build
 CHART_W  = 258
 CHART_H  = 128
+BAR_W    = 150
 
 
 def pick_font(root, candidates):
@@ -55,6 +62,8 @@ def pick_font(root, candidates):
 
 
 class FlatButton(tk.Frame):
+    """A borderless button that doesn't look like 1998."""
+
     def __init__(self, parent, text, command, font, toggle=False, on=False):
         super().__init__(parent, bg=PANEL, highlightthickness=1,
                          highlightbackground=LINE, highlightcolor=LINE)
@@ -96,6 +105,35 @@ class FlatButton(tk.Frame):
         self.label.configure(text=t)
 
 
+class Tab(tk.Frame):
+    """One entry in the right column's tab strip."""
+
+    def __init__(self, parent, text, command, font):
+        super().__init__(parent, bg=BG)
+        self.command = command
+        self.label = tk.Label(self, text=text, bg=BG, fg=FAINT, font=font,
+                              padx=12, pady=5, cursor="hand2")
+        self.label.pack()
+        self.underline = tk.Frame(self, bg=BG, height=2)
+        self.underline.pack(fill="x")
+        for w in (self, self.label):
+            w.bind("<Button-1>", lambda _e: self.command())
+            w.bind("<Enter>", lambda _e: self._hover(True))
+            w.bind("<Leave>", lambda _e: self._hover(False))
+        self.active = False
+
+    def _hover(self, on):
+        if not self.active:
+            self.label.configure(fg=MUTED if on else FAINT)
+
+    def set_active(self, active):
+        self.active = active
+        self.label.configure(fg=ACCENT if active else FAINT,
+                             bg=TAB_ON_BG if active else BG)
+        self.configure(bg=TAB_ON_BG if active else BG)
+        self.underline.configure(bg=ACCENT if active else BG)
+
+
 class DigitPad:
     def __init__(self, root):
         self.root = root
@@ -105,14 +143,15 @@ class DigitPad:
 
         ui = pick_font(root, ["Segoe UI Variable Text", "Segoe UI", "Inter", "Helvetica"])
         mono = pick_font(root, ["Cascadia Mono", "Consolas", "SF Mono", "Courier New"])
+        self.ui = ui
         self.f_label = tkfont.Font(family=ui, size=9)
         self.f_body  = tkfont.Font(family=ui, size=10)
         self.f_btn   = tkfont.Font(family=ui, size=10)
-        self.f_num   = tkfont.Font(family=ui, size=64, weight="normal")
+        self.f_tab   = tkfont.Font(family=ui, size=10)
+        self.f_num   = tkfont.Font(family=ui, size=58)
         self.f_mono  = tkfont.Font(family=mono, size=9)
         self.f_pct   = tkfont.Font(family=mono, size=9)
 
-        # ---- model
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = SimpleCNN().to(self.device)
         self.model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=self.device))
@@ -126,62 +165,114 @@ class DigitPad:
         self.image = Image.new("L", (CANVAS, CANVAS), 0)
         self.draw = ImageDraw.Draw(self.image)
 
-        outer = tk.Frame(root, bg=BG, padx=28, pady=26)
+        outer = tk.Frame(root, bg=BG, padx=26, pady=24)
         outer.pack()
 
-        # left: the canvas
-        left = tk.Frame(outer, bg=BG)
+        self.build_left(outer)
+        self.build_right(outer)
+
+        for key in ("<Key-c>", "<Key-C>", "<BackSpace>"):
+            root.bind(key, lambda e: self.clear())
+        for key in ("<Key-m>", "<Key-M>"):
+            root.bind(key, lambda e: self.mode_btn._click())
+        root.bind("<Tab>", lambda e: (self.cycle_tab(), "break")[1])
+        root.bind("<Escape>", lambda e: root.destroy())
+
+        self.refresh_mode()
+        self.clear()
+        self.center(root)
+
+    # left column
+    def build_left(self, parent):
+        left = tk.Frame(parent, bg=BG)
         left.grid(row=0, column=0, sticky="n")
 
         self._eyebrow(left, "DRAW").pack(anchor="w")
         tk.Label(left, text="Digit Guesser", bg=BG, fg=TEXT,
-                 font=tkfont.Font(family=ui, size=17)).pack(anchor="w", pady=(2, 14))
+                 font=tkfont.Font(family=self.ui, size=17)).pack(anchor="w", pady=(2, 14))
 
         field = tk.Frame(left, bg=BG, highlightthickness=1, highlightbackground=LINE)
         field.pack()
         self.canvas = tk.Canvas(field, width=CANVAS, height=CANVAS, bg=INK_FIELD,
                                 highlightthickness=0, cursor="crosshair")
         self.canvas.pack()
-        self.canvas.bind("<B1-Motion>", lambda e: self.stroke(e, 255))
         self.canvas.bind("<Button-1>", lambda e: self.stroke(e, 255))
+        self.canvas.bind("<B1-Motion>", lambda e: self.stroke(e, 255))
         self.canvas.bind("<ButtonRelease-1>", self.release)
         self.canvas.bind("<B3-Motion>", lambda e: self.stroke(e, 0))
         self.canvas.bind("<ButtonRelease-3>", self.release)
 
         bar = tk.Frame(left, bg=BG)
         bar.pack(fill="x", pady=(14, 0))
-        self.clear_btn = FlatButton(bar, "Clear", self.clear, self.f_btn)
-        self.clear_btn.pack(side="left")
+        FlatButton(bar, "Clear", self.clear, self.f_btn).pack(side="left")
         self.mode_btn = FlatButton(bar, "", self.toggle_mode, self.f_btn,
                                    toggle=True, on=True)
         self.mode_btn.pack(side="right")
 
-        self.hint = tk.Label(left, text="", bg=BG, fg=FAINT, font=self.f_label,
-                             anchor="w", justify="left")
-        self.hint.pack(fill="x", pady=(12, 0))
+        self.hint = tk.Label(left, text="", bg=BG, fg=FAINT, font=self.f_label)
+        self.hint.pack(anchor="w", pady=(12, 0))
 
-        # right: the readout
-        right = tk.Frame(outer, bg=BG, padx=30)
+        device_name = (f"GPU · {torch.cuda.get_device_name(0)}"
+                       if self.device.type == "cuda" else "CPU")
+        tk.Label(left, text=device_name, bg=BG, fg=FAINT,
+                 font=self.f_label).pack(anchor="w", pady=(6, 0))
+
+    # right column
+    def build_right(self, parent):
+        right = tk.Frame(parent, bg=BG, padx=26)
         right.grid(row=0, column=1, sticky="n")
 
-        self._eyebrow(right, "PREDICTION").pack(anchor="w")
+        strip = tk.Frame(right, bg=BG)
+        strip.pack(anchor="w", pady=(0, 16))
+        self.tabs = {}
+        for name in ("Prediction", "Training"):
+            t = Tab(strip, name, lambda n=name: self.show_tab(n), self.f_tab)
+            t.pack(side="left")
+            self.tabs[name] = t
 
-        row = tk.Frame(right, bg=BG)
+        # fixed size so switching tabs never resizes the window. the real
+        # height gets set below, once both panels can be measured
+        self.stack = tk.Frame(right, bg=BG, width=PANEL_W, height=PANEL_H)
+        self.stack.pack(anchor="w")
+        self.stack.pack_propagate(False)
+
+        self.panels = {
+            "Prediction": self.build_prediction(self.stack),
+            "Training": self.build_training(self.stack),
+        }
+
+        # size the stack to whichever panel is tallest, measured instead of
+        # assumed. font sizes are in points, so at 125% display scaling the
+        # content ends up taller than any pixel constant would predict
+        heights, widths = [], []
+        for panel in self.panels.values():
+            panel.pack(anchor="nw")
+            self.stack.update_idletasks()
+            heights.append(panel.winfo_reqheight())
+            widths.append(panel.winfo_reqwidth())
+            panel.pack_forget()
+        self.stack.configure(width=max(PANEL_W, *widths), height=max(heights) + 2)
+
+        self.show_tab("Prediction")
+
+    def build_prediction(self, parent):
+        p = tk.Frame(parent, bg=BG)
+
+        row = tk.Frame(p, bg=BG)
         row.pack(anchor="w")
         self.guess = tk.Label(row, text="–", bg=BG, fg=TEXT, font=self.f_num)
         self.guess.pack(side="left")
-        conf_col = tk.Frame(row, bg=BG)
-        conf_col.pack(side="left", padx=(16, 0), pady=(22, 0))
-        self.conf = tk.Label(conf_col, text="—", bg=BG, fg=ACCENT, font=self.f_body)
+        col = tk.Frame(row, bg=BG)
+        col.pack(side="left", padx=(14, 0), pady=(20, 0))
+        self.conf = tk.Label(col, text="—", bg=BG, fg=ACCENT, font=self.f_body)
         self.conf.pack(anchor="w")
-        self.runner = tk.Label(conf_col, text="draw something", bg=BG, fg=FAINT,
+        self.runner = tk.Label(col, text="draw something", bg=BG, fg=FAINT,
                                font=self.f_label)
         self.runner.pack(anchor="w")
 
-        tk.Frame(right, bg=LINE, height=1).pack(fill="x", pady=16)
+        tk.Frame(p, bg=LINE, height=1).pack(fill="x", pady=14)
 
-        # ten rows: digit, bar, percentage
-        rows = tk.Frame(right, bg=BG)
+        rows = tk.Frame(p, bg=BG)
         rows.pack(anchor="w")
         self.row_widgets = []
         for d in range(10):
@@ -189,51 +280,34 @@ class DigitPad:
             r.pack(anchor="w", pady=1)
             lab = tk.Label(r, text=str(d), bg=BG, fg=FAINT, font=self.f_mono, width=2)
             lab.pack(side="left")
-            track = tk.Canvas(r, width=170, height=8, bg=PANEL, highlightthickness=0)
-            track.pack(side="left", padx=(4, 8))
+            track = tk.Canvas(r, width=BAR_W, height=8, bg=PANEL, highlightthickness=0)
+            track.pack(side="left", padx=(2, 8))
             fill = track.create_rectangle(0, 0, 0, 8, fill=ACCENT_DIM, width=0)
             pct = tk.Label(r, text="", bg=BG, fg=FAINT, font=self.f_pct, width=4,
                            anchor="e")
             pct.pack(side="left")
             self.row_widgets.append((lab, track, fill, pct))
 
-        tk.Frame(right, bg=LINE, height=1).pack(fill="x", pady=16)
+        tk.Frame(p, bg=LINE, height=1).pack(fill="x", pady=14)
 
-        self._eyebrow(right, "MODEL INPUT  28 × 28").pack(anchor="w", pady=(0, 8))
-        pv = tk.Frame(right, bg=BG, highlightthickness=1, highlightbackground=LINE)
-        pv.pack(anchor="w")
-        self.preview = tk.Label(pv, bg=INK_FIELD, width=PREVIEW, height=PREVIEW)
+        foot = tk.Frame(p, bg=BG)
+        foot.pack(anchor="w")
+        box = tk.Frame(foot, bg=BG, highlightthickness=1, highlightbackground=LINE)
+        box.pack(side="left")
+        # no width or height here. without an image tkinter reads them as
+        # characters and lines instead of pixels, and the widget blows up
+        self.preview = tk.Label(box, bg=INK_FIELD, borderwidth=0)
         self.preview.pack()
+        # give it a blank frame straight away so the panel gets measured at
+        # its real height instead of with an empty placeholder in it
+        self.show_preview(Image.new("L", (28, 28), 0))
+        tk.Label(foot, text="what the model\nreceives, 28×28", bg=BG, fg=FAINT,
+                 font=self.f_label, justify="left").pack(side="left", padx=(12, 0),
+                                                         anchor="s", pady=(0, 4))
+        return p
 
-        self.status = tk.Label(right, text="", bg=BG, fg=FAINT, font=self.f_label)
-        self.status.pack(anchor="w", pady=(12, 0))
-
-        # far right: curves
-        far = tk.Frame(outer, bg=BG)
-        far.grid(row=0, column=2, sticky="n")
-        self.build_charts(far)
-
-        # keys
-        for k in ("c", "C", "<BackSpace>"):
-            root.bind(k if k.startswith("<") else f"<Key-{k}>", lambda e: self.clear())
-        for k in ("m", "M"):
-            root.bind(f"<Key-{k}>", lambda e: self.mode_btn._click())
-        root.bind("<Escape>", lambda e: root.destroy())
-
-        self.refresh_mode()
-        self.clear()
-        self.status.configure(
-            text=f"{'GPU · ' + torch.cuda.get_device_name(0) if self.device.type == 'cuda' else 'CPU'}"
-        )
-        self.center(root)
-
-    # charts 
-    def build_charts(self, parent):
-        """Per-epoch curves from the last training run, if there was one."""
-        self._eyebrow(parent, "TRAINING").pack(anchor="w")
-        tk.Label(parent, text="Last run", bg=BG, fg=TEXT,
-                 font=tkfont.Font(family=self.f_body.cget("family"), size=17)
-                 ).pack(anchor="w", pady=(2, 14))
+    def build_training(self, parent):
+        p = tk.Frame(parent, bg=BG)
 
         history = []
         if HISTORY_PATH.exists():
@@ -243,61 +317,67 @@ class DigitPad:
                 history = []
 
         if not history:
-            box = tk.Frame(parent, bg=BG, highlightthickness=1,
-                           highlightbackground=LINE, width=CHART_W, height=200)
-            box.pack_propagate(False)
-            box.pack()
-            tk.Label(box, text="No training history yet.\n\nRun train.py and the\n"
-                              "loss and accuracy curves\nappear here.",
+            tk.Label(p, text="No training run yet.\n\nRun train.py and the loss\n"
+                             "and accuracy curves show\nup here.",
                      bg=BG, fg=FAINT, font=self.f_label, justify="left").pack(
-                         expand=True, padx=16)
-            return
+                         anchor="w", pady=40)
+            return p
 
         epochs = [h["epoch"] for h in history]
 
-        # cross-entropy loss: two series, so it carries a legend
-        self._eyebrow(parent, "CROSS-ENTROPY LOSS  ·  PER EPOCH").pack(anchor="w", pady=(0, 4))
-        # final values live in the legend, not on the curve: train and test
-        # converge, so endpoint labels would sit on top of each other
-        legend = tk.Frame(parent, bg=BG)
+        # final values go in the legend. train and test converge, so endpoint
+        # labels on the curve would land on top of each other
+        self._eyebrow(p, "CROSS-ENTROPY LOSS").pack(anchor="w", pady=(0, 4))
+        legend = tk.Frame(p, bg=BG)
         legend.pack(anchor="w", pady=(0, 6))
-        finals = (("train", SERIES_A, history[-1]["train_loss"]),
-                  ("test", SERIES_B, history[-1]["test_loss"]))
-        for name, colour, value in finals:
-            swatch = tk.Canvas(legend, width=14, height=10, bg=BG, highlightthickness=0)
-            swatch.create_line(0, 5, 14, 5, fill=colour, width=2)
-            swatch.pack(side="left")
+        for name, colour, value in (("train", SERIES_A, history[-1]["train_loss"]),
+                                    ("test", SERIES_B, history[-1]["test_loss"])):
+            sw = tk.Canvas(legend, width=14, height=10, bg=BG, highlightthickness=0)
+            sw.create_line(0, 5, 14, 5, fill=colour, width=2)
+            sw.pack(side="left")
             tk.Label(legend, text=name, bg=BG, fg=MUTED, font=self.f_label).pack(
                 side="left", padx=(5, 3))
             tk.Label(legend, text=f"{value:.3f}", bg=BG, fg=TEXT,
                      font=self.f_pct).pack(side="left", padx=(0, 14))
 
-        loss_cv = tk.Canvas(parent, width=CHART_W, height=CHART_H, bg=BG,
-                            highlightthickness=0)
-        loss_cv.pack(anchor="w")
-        self.plot(loss_cv, epochs, [
+        cv = tk.Canvas(p, width=CHART_W, height=CHART_H, bg=BG, highlightthickness=0)
+        cv.pack(anchor="w")
+        self.plot(cv, epochs, [
             {"colour": SERIES_A, "values": [h["train_loss"] for h in history]},
             {"colour": SERIES_B, "values": [h["test_loss"] for h in history]},
         ], lambda v: f"{v:.3f}", label_endpoint=False)
 
-        # accuracy: one series, so the heading names it and no legend is needed
-        self._eyebrow(parent, "TEST ACCURACY %  ·  PER EPOCH").pack(anchor="w", pady=(18, 4))
-        acc_cv = tk.Canvas(parent, width=CHART_W, height=CHART_H, bg=BG,
-                           highlightthickness=0)
-        acc_cv.pack(anchor="w")
-        self.plot(acc_cv, epochs, [
+        self._eyebrow(p, "TEST ACCURACY %").pack(anchor="w", pady=(20, 6))
+        cv2 = tk.Canvas(p, width=CHART_W, height=CHART_H, bg=BG, highlightthickness=0)
+        cv2.pack(anchor="w")
+        self.plot(cv2, epochs, [
             {"colour": SERIES_B, "values": [h["test_acc"] for h in history]},
         ], lambda v: f"{v:.2f}")
 
+        tk.Frame(p, bg=LINE, height=1).pack(fill="x", pady=14)
         best = max(h["test_acc"] for h in history)
-        tk.Label(parent, text=f"best {best:.2f}%  ·  {len(epochs)} epochs",
-                 bg=BG, fg=FAINT, font=self.f_label).pack(anchor="w", pady=(10, 0))
+        tk.Label(p, text=f"best {best:.2f}%   ·   {len(epochs)} epochs",
+                 bg=BG, fg=FAINT, font=self.f_label).pack(anchor="w")
+        return p
 
+    def show_tab(self, name):
+        for panel in self.panels.values():
+            panel.pack_forget()
+        self.panels[name].pack(anchor="nw")
+        for key, tab in self.tabs.items():
+            tab.set_active(key == name)
+        self.active_tab = name
+
+    def cycle_tab(self):
+        order = list(self.panels)
+        self.show_tab(order[(order.index(self.active_tab) + 1) % len(order)])
+
+    # charts
     def plot(self, cv, epochs, series, fmt, label_endpoint=True):
-        """A small line chart: one y-scale, recessive grid, nothing clipped.
+        """Small line chart: one y-scale, recessive grid, nothing clipped.
 
         Insets are measured from the rendered text rather than guessed, which
-        is what stops the y-axis labels running off the left edge.
+        is what keeps the y-axis labels from running off the left edge.
         """
         values = [v for s in series for v in s["values"]]
         lo, hi = min(values), max(values)
@@ -319,7 +399,7 @@ class DigitPad:
         def Y(v):
             return top + ph * (1 - (v - lo) / (hi - lo))
 
-        for frac, tick in zip((1.0, 0.5, 0.0), ticks[::-1]):   # recessive grid
+        for frac, tick in zip((1.0, 0.5, 0.0), ticks[::-1]):
             y = top + ph * (1 - frac)
             cv.create_line(left, y, left + pw, y, fill=LINE)
             cv.create_text(left - 8, y, text=fmt(tick), anchor="e",
@@ -344,7 +424,7 @@ class DigitPad:
                 cv.create_text(x + 10, y, text=fmt(s["values"][-1]), anchor="w",
                                fill=TEXT, font=self.f_pct)
 
-    # helpers 
+    # helpers
     def _eyebrow(self, parent, text):
         return tk.Label(parent, text=text, bg=BG, fg=FAINT, font=self.f_label)
 
@@ -356,16 +436,16 @@ class DigitPad:
         y = max(0, (root.winfo_screenheight() - h) // 2 - 30)
         root.geometry(f"+{x}+{y}")
 
-    # input 
+    # input
     def stroke(self, event, ink):
         x, y = event.x, event.y
-        color = "#ffffff" if ink else INK_FIELD
+        colour = "#ffffff" if ink else INK_FIELD
         if self.last is not None:
-            self.canvas.create_line(*self.last, x, y, width=PEN, fill=color,
+            self.canvas.create_line(*self.last, x, y, width=PEN, fill=colour,
                                     capstyle=tk.ROUND, joinstyle=tk.ROUND, smooth=True)
             self.draw.line([self.last, (x, y)], fill=ink, width=PEN, joint="curve")
         r = PEN / 2
-        self.canvas.create_oval(x - r, y - r, x + r, y + r, fill=color, outline=color)
+        self.canvas.create_oval(x - r, y - r, x + r, y + r, fill=colour, outline=colour)
         self.draw.ellipse([x - r, y - r, x + r, y + r], fill=ink)
         self.last = (x, y)
         self.schedule()
@@ -387,7 +467,7 @@ class DigitPad:
         self.canvas.delete("all")
         self.draw.rectangle([0, 0, CANVAS, CANVAS], fill=0)
         self.last = None
-        self.guess.configure(text="–", fg=TEXT)
+        self.guess.configure(text="–")
         self.conf.configure(text="—")
         self.runner.configure(text="draw something")
         self.set_bars([0.0] * 10)
@@ -399,11 +479,10 @@ class DigitPad:
         self.predict()
 
     def refresh_mode(self):
-        on = self.mode_btn.on
-        self.mode_btn.set_text("Centre of mass" if on else "Bounding box")
-        self.hint.configure(text="Right click to erase  ·  C clear  ·  M align  ·  Esc quit")
+        self.mode_btn.set_text("Centre of mass" if self.mode_btn.on else "Bounding box")
+        self.hint.configure(text="right click erase  ·  C clear  ·  M align  ·  Esc quit")
 
-    # inference 
+    # inference
     @torch.no_grad()
     def predict(self):
         frame = to_mnist_frame(self.image, center_by_mass=self.center_by_mass)
@@ -416,7 +495,7 @@ class DigitPad:
         best, second = order[0], order[1]
         if probs[best] < 0.001:
             return
-        self.guess.configure(text=str(best), fg=TEXT)
+        self.guess.configure(text=str(best))
         self.conf.configure(text=f"{probs[best]:.0%} confident")
         self.runner.configure(text=f"next best · {second} at {probs[second]:.0%}")
         self.set_bars(probs, best)
@@ -424,7 +503,7 @@ class DigitPad:
     def set_bars(self, probs, best=None):
         for d, (lab, track, fill, pct) in enumerate(self.row_widgets):
             top = d == best
-            track.coords(fill, 0, 0, max(0, probs[d]) * 170, 8)
+            track.coords(fill, 0, 0, max(0.0, probs[d]) * BAR_W, 8)
             track.itemconfig(fill, fill=ACCENT if top else ACCENT_DIM)
             lab.configure(fg=ACCENT if top else FAINT)
             pct.configure(text=f"{probs[d]:.0%}" if probs[d] >= 0.005 else "",
@@ -433,7 +512,9 @@ class DigitPad:
     def show_preview(self, frame28):
         img = frame28.resize((PREVIEW, PREVIEW), Image.NEAREST)
         self._preview_ref = ImageTk.PhotoImage(img)
-        self.preview.configure(image=self._preview_ref, width=PREVIEW, height=PREVIEW)
+        # with an image set, width and height count as pixels
+        self.preview.configure(image=self._preview_ref,
+                               width=PREVIEW, height=PREVIEW)
 
 
 def main():
